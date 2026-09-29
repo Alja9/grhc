@@ -219,9 +219,13 @@ Calculate the config from structured and unstructured text input
 
 {{/*
 Build the cache section for tempo.yaml.
-When memcached.enabled is true, auto-generates cache.caches from per-role memcached sections.
-Roles without a dedicated per-role instance fall back to the shared memcached cluster.
-When memcached.enabled is false, outputs the user-defined cache block from values.yaml verbatim.
+When the shared memcached cluster or any per-role memcached section is enabled,
+auto-generates cache.caches. Each enabled per-role section gets its own entry;
+roles without a dedicated instance fall back to the shared cluster. When the
+shared cluster is disabled, they fall back to the entries in .Values.cache
+instead, skipping any entry that points at the undeployed shared host.
+When nothing is enabled, outputs the user-defined cache block from values.yaml
+verbatim, which is how an externally managed cache is configured.
 */}}
 {{- define "tempo.cacheConfig" -}}
 {{- $fullname := include "tempo.fullname" . -}}
@@ -230,17 +234,36 @@ When memcached.enabled is false, outputs the user-defined cache block from value
     "parquet-footer"  (dict "section" "memcachedParquetFooter"  "component" "memcached-parquet-footer")
     "bloom"           (dict "section" "memcachedBloom"          "component" "memcached-bloom")
     "frontend-search" (dict "section" "memcachedFrontendSearch" "component" "memcached-frontend-search") -}}
-{{- if .Values.memcached.enabled -}}
 {{- $sharedRoles := list -}}
+{{- $anyPerRole := false -}}
 {{- range $role := $roles -}}
   {{- $mapping := get $perRoleMap $role -}}
   {{- $vals := index $.Values (get $mapping "section") -}}
-  {{- if not (and $vals (index $vals "enabled")) -}}
+  {{- if and $vals (index $vals "enabled") -}}
+    {{- $anyPerRole = true -}}
+  {{- else -}}
     {{- $sharedRoles = append $sharedRoles $role -}}
   {{- end -}}
 {{- end -}}
+{{- if or .Values.memcached.enabled $anyPerRole -}}
 caches:
-{{- if gt (len $sharedRoles) 0 }}
+{{- if not .Values.memcached.enabled -}}
+{{- $sharedHost := printf "%s-memcached" $fullname -}}
+{{- range $entry := (get (.Values.cache | default dict) "caches" | default list) -}}
+  {{- if ne (tpl (toString (dig "memcached" "host" "" $entry)) $) $sharedHost -}}
+    {{- $keep := list -}}
+    {{- range $r := (get $entry "roles" | default list) -}}
+      {{- if or (has $r $sharedRoles) (not (has $r $roles)) -}}
+        {{- $keep = append $keep $r -}}
+      {{- end -}}
+    {{- end -}}
+    {{- if $keep }}
+  - {{ set (deepCopy $entry) "roles" $keep | toYaml | indent 4 | trim }}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end }}
+{{- if and .Values.memcached.enabled (gt (len $sharedRoles) 0) }}
   - memcached:
       host: {{ $fullname }}-memcached
       service: memcached-client
