@@ -1133,6 +1133,48 @@ liveStore:
   statefulStrategy:
     rollingUpdate:
       partition: 0
+  # -- Persistence configuration for live-store
+  persistence:
+    # -- Enable creating PVCs for the live-store data volume. The WAL and local
+    # blocks then survive a restart, so the live-store resumes from its committed
+    # Kafka offset (never further back than 2 x complete_block_timeout) instead of
+    # re-reading that whole window, as it must when it starts with no local data.
+    enabled: false
+    # -- Enable StatefulSetRecreation for changes to PVC size
+    enableStatefulSetRecreationForSizeChange: false
+    # -- use emptyDir with ramdisk instead of PVC. **Please note that all data in live-store will be lost on pod restart**
+    inMemory: false
+    # -- Size of persistent or memory disk
+    size: 10Gi
+    # -- Storage class to be used.
+    # If defined, storageClassName: <storageClass>.
+    # If set to "-", storageClassName: "", which disables dynamic provisioning.
+    # If empty or set to null, no storageClassName spec is
+    # set, choosing the default provisioner (gp2 on AWS, standard on GKE, AWS, and OpenStack).
+    storageClass: null
+    # -- Annotations for live-store's persist volume claim
+    annotations: {}
+    # -- Labels for live-store's persist volume claim
+    labels: {}
+  # -- Spec for the `data` volume when persistence is disabled. By default an
+  # empty `emptyDir: {}`; set e.g. `sizeLimit` or `medium: Memory` as needed.
+  walEmptyDir: {}
+  # Note: the retained volume also holds the live-store's shutdown marker
+  # (`/var/tempo/live-store/shutdown-marker`). It is removed on a graceful shutdown,
+  # but if a pod is force-killed after the rollout-operator has called
+  # `prepare-downscale` (grace period exceeded, OOMKill, node loss), a stale marker
+  # is left on the volume. On scale-up that pod then starts with
+  # `create-partition-on-startup=false` and its partition will not become ACTIVE, so
+  # it takes no writes. If a scaled-up live-store never becomes ready, or its
+  # partition stays INACTIVE, remove the shutdown marker from its PVC or call
+  # `DELETE /live-store/prepare-downscale` on it.
+  persistentVolumeClaimRetentionPolicy:
+    # -- Enable Persistent volume retention policy for the live-store StatefulSet
+    enabled: false
+    # -- Volume retention behaviour when the StatefulSet replica count is reduced
+    whenScaled: Retain
+    # -- Volume retention behaviour when the StatefulSet is deleted
+    whenDeleted: Retain
   # Zone-aware replication spreads the live-stores over failure domains such as
   # availability zones, racks or data centres. Every zone runs a full set of
   # live-stores, so each Kafka partition gets one owner per zone (RF equals the
